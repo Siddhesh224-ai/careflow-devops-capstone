@@ -1,0 +1,74 @@
+.DS_Store
+.idea/
+.vscode/
+.env
+*.env.local
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+node_modules/
+dist/
+coverage/
+*.log
+# Generated TypeScript/Vite files
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Terraform local state and downloads
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+crash.log
+
+# Local evidence may contain account identifiers
+evidence/
+
+  # Every local environment variant; sanitized examples remain tracked
+  .env.*
+  !.env.example
+  !**/.env.example
+
+  # Additional test and coverage output
+  .coverage.*
+  pytest-results.xml
+  junit*.xml
+  *.sqlite
+  *.sqlite3
+  *.db
+
+  # Terraform local variables, overrides, credentials, and crash output
+  *.tfvars
+  *.tfvars.json
+  override.tf
+  override.tf.json
+  *_override.tf
+  *_override.tf.json
+  .terraformrc
+  terraform.rc
+  crash.*.log
+
+  # Local Kubernetes credentials
+  kubeconfig
+  kubeconfig.*
+  *.kubeconfig
+
+  # Private keys and certificates
+  *.pem
+  *.key
+  *.p12
+  *.pfx
+
+  # Editor temporary files
+  *.swp
+  *~
+/PROJECT_TODO.md
+/STEPS.md
