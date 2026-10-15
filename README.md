@@ -256,6 +256,16 @@ npm audit --omit=dev --audit-level=high
 - List selectors load up to 100 patients/doctors, appropriate for this demonstration scope but not a large clinic.
 - Backend integration and migration execution require a running PostgreSQL instance; SQLite is deliberately not used as a substitute.
 
+## Infrastructure decision record
+
+### EKS worker instance compromise — 14 October 2026
+
+The original deployment requirement specified two `t3.medium` EKS worker nodes. During the first Terraform apply, AWS rejected the managed node group because `t3.medium` is not eligible under this account's Free Plan. The deployment therefore uses two `m7i-flex.large` x86_64 workers, which AWS reported as Free Tier eligible for this account and which fit its five-vCPU EC2 On-Demand quota.
+
+This preserves the intended two-worker EKS architecture and provides sufficient memory for CareFlow and the monitoring stack, but it does not satisfy a rubric that requires the literal `t3.medium` instance type. If that exact type becomes mandatory, the account must first be moved to a plan that permits it, the cost impact must be approved, and `terraform/main.tf`, `STEPS.md`, and the deployment evidence must be updated together.
+
+The same account policy explicitly denies creation of IAM OIDC providers, so IRSA is disabled. The EBS CSI controller receives its required AWS permissions through a dedicated EKS Pod Identity role instead; this avoids the blocked OIDC operation and avoids exposing the worker-node IAM role to controller pods through EC2 instance metadata.
+
 ## DevOps extension path
 
 The next recommended step is to run the existing container builds, health probes, migrations, integration tests, frontend tests/build, and dependency audit in GitHub Actions. Kubernetes manifests, secret management, observability, backup validation, and deployment promotion can follow without changing the modular application boundary.
