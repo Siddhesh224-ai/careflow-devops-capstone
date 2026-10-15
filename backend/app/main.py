@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +40,11 @@ app.add_middleware(
 )
 app.include_router(health_router)
 app.include_router(api_router)
+Instrumentator(excluded_handlers=["/metrics"]).instrument(app).expose(
+    app,
+    endpoint="/metrics",
+    include_in_schema=False,
+)
 
 
 @app.exception_handler(AppError)
