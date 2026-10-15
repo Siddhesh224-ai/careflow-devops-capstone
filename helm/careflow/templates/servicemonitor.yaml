@@ -1,0 +1,11 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: careflow-backend
+  labels: { app: careflow-backend }
+spec:
+  selector: { matchLabels: { app: careflow-backend } }
+  endpoints: [{ port: http, path: /metrics, interval: 15s }]
+  namespaceSelector: { matchNames: [careflow] }
+{{- end }}

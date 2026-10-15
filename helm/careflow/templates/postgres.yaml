@@ -1,0 +1,44 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: { name: careflow-gp3 }
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+parameters: { type: gp3, encrypted: "true" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: careflow-postgres }
+spec:
+  selector: { app: careflow-postgres }
+  ports: [{ name: postgres, port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: careflow-postgres }
+spec:
+  serviceName: careflow-postgres
+  replicas: 1
+  selector: { matchLabels: { app: careflow-postgres } }
+  template:
+    metadata: { labels: { app: careflow-postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: careflow-secrets, key: POSTGRES_USER } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: careflow-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: POSTGRES_DB, valueFrom: { secretKeyRef: { name: careflow-secrets, key: POSTGRES_DB } } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          readinessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        storageClassName: careflow-gp3
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: {{ .Values.postgres.storage }} } }
