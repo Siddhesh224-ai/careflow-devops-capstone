@@ -16,6 +16,8 @@ node_modules/
 dist/
 coverage/
 *.log
+*.mov
+!demo/demo_video.mov
 # Generated TypeScript/Vite files
 *.tsbuildinfo
 frontend/vite.config.js
@@ -29,46 +31,71 @@ frontend/vite.config.d.ts
 terraform.tfvars
 crash.log
 
-# Local evidence may contain account identifiers
-evidence/
+# Evidence is private by default. Only the reviewed submission artifacts below
+# are allowed into Git; login captures, raw videos, and unreviewed screenshots
+# remain ignored.
+evidence/*
+!evidence/screenshots/
+evidence/screenshots/*
+!evidence/screenshots/application_ingress.png
+!evidence/screenshots/backend_tests_passed.png
+!evidence/screenshots/docker_containers_healthy.png
+!evidence/screenshots/github_actions_success.png
+!evidence/screenshots/successfull_gh_run_watch.png
+!evidence/screenshots/github_backend_package.png
+!evidence/screenshots/terraform_plan_created.png
+!evidence/screenshots/terraform_apply_complete.png
+!evidence/screenshots/terraform_destroy_complete.png
+!evidence/screenshots/aws_vpc_resource_map_redacted.png
+!evidence/screenshots/aws_nodes_ready.png
+!evidence/screenshots/ebs_csi_active.png
+!evidence/screenshots/kubectl_get_pods.png
+!evidence/screenshots/kubectl_get_svc.png
+!evidence/screenshots/helm_list.png
+!evidence/screenshots/prometheus_backend_up.png
+!evidence/screenshots/grafana_request_rate.png
+!evidence/localhost/
+evidence/localhost/*
+!evidence/localhost/metric_output.txt
 
-  # Every local environment variant; sanitized examples remain tracked
-  .env.*
-  !.env.example
-  !**/.env.example
+# Every local environment variant; sanitized examples remain tracked
+.env.*
+!.env.example
+!**/.env.example
 
-  # Additional test and coverage output
-  .coverage.*
-  pytest-results.xml
-  junit*.xml
-  *.sqlite
-  *.sqlite3
-  *.db
+# Additional test and coverage output
+.coverage.*
+pytest-results.xml
+junit*.xml
+*.sqlite
+*.sqlite3
+*.db
 
-  # Terraform local variables, overrides, credentials, and crash output
-  *.tfvars
-  *.tfvars.json
-  override.tf
-  override.tf.json
-  *_override.tf
-  *_override.tf.json
-  .terraformrc
-  terraform.rc
-  crash.*.log
+# Terraform local variables, overrides, credentials, and crash output
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+crash.*.log
+/terraform_fina_plan.txt
 
-  # Local Kubernetes credentials
-  kubeconfig
-  kubeconfig.*
-  *.kubeconfig
+# Local Kubernetes credentials
+kubeconfig
+kubeconfig.*
+*.kubeconfig
 
-  # Private keys and certificates
-  *.pem
-  *.key
-  *.p12
-  *.pfx
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
 
-  # Editor temporary files
-  *.swp
-  *~
+# Editor temporary files
+*.swp
+*~
 /PROJECT_TODO.md
 /STEPS.md

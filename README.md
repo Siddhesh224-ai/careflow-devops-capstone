@@ -1,271 +1,235 @@
 # CareFlow
 
-CareFlow is a compact, production-minded clinic operations dashboard for managing patients, doctors, and appointments. It is a modular monolith designed as the application foundation for Docker, Kubernetes, CI/CD, logging, monitoring, and deployment exercises.
+CareFlow is a full-stack clinic operations application and DevOps capstone. It gives administrators one place to manage patients, doctors, and appointments, while each doctor receives a private dashboard for their schedule and availability.
 
-> **Demonstration software only.** CareFlow includes role-based authentication, but it has not been audited for healthcare compliance. Do not expose it publicly or use real patient information. Use synthetic data only.
+[Repository](https://github.com/Siddhesh224-ai/careflow-devops-capstone) · [CI pipeline](https://github.com/Siddhesh224-ai/careflow-devops-capstone/actions/workflows/ci.yml) · [Backend image](https://github.com/users/Siddhesh224-ai/packages/container/package/careflow-backend) · [Frontend image](https://github.com/users/Siddhesh224-ai/packages/container/package/careflow-frontend)
 
-## Features
+> **Demonstration software only.** Use synthetic data. CareFlow has not been audited for healthcare compliance and must not hold real patient information.
 
-- Live dashboard metrics, today's schedule, recent registrations, and appointment status chart
-- Administrator and doctor logins using signed JWT bearer tokens that expire after 48 hours
-- Searchable, paginated patient CRUD, appointment history, validation, and safe deletion rules
-- Searchable doctor directory with per-doctor accounts, working hours, CRUD, and relationship protection
-- Appointment scheduling with existing-patient search or inline patient registration, plus date/status filters, editing, status transitions, and cancellation
-- Doctor dashboards for viewing appointments, managing weekly hours and time off, and marking elapsed appointments complete
-- Schedule protection for working hours, doctor time off, and overlapping appointments using service validation, per-doctor transaction locks, and a PostgreSQL exclusion constraint
-- Separate `GET /health` liveness and database-aware `GET /ready` readiness probes
-- Responsive React UI with loading, empty, error, confirmation, and validation states
-- Idempotent, deterministic synthetic development seed
+![CareFlow administrator dashboard running through the AWS ingress](evidence/screenshots/application_ingress.png)
+
+## What the application does
+
+| Role | Capabilities |
+| --- | --- |
+| Administrator | Sign in, view clinic totals, search or register patients, review patient appointment history, create doctors and their logins, and schedule or manage appointments. |
+| Doctor | Sign in to a separate dashboard, view only their appointments, set weekly working hours, block specific time off, and mark elapsed appointments complete. |
+
+An appointment can be scheduled for an existing patient or together with a new patient. The combined operation is atomic: if scheduling fails, the new patient is rolled back. A booking is accepted only when the doctor is active, working at that time, not on time off, and has no overlapping active appointment.
+
+```mermaid
+flowchart LR
+    A[Admin signs in] --> P{Patient exists?}
+    P -->|Yes| S[Search and select patient]
+    P -->|No| N[Register patient inside booking]
+    S --> V[Validate doctor availability]
+    N --> V
+    V -->|Available| B[Create appointment]
+    V -->|Conflict| R[Reject and roll back]
+    B --> D[Doctor dashboard]
+    D --> T[Manage hours or time off]
+    D --> C[Mark elapsed appointment complete]
+    C --> H[Patient history remains available]
+```
+
+Authentication uses signed JWT bearer tokens with a 48-hour lifetime. Tokens are stored in tab-scoped `sessionStorage`, so an administrator and a doctor can remain signed in independently in different browser tabs.
 
 ## Architecture
 
-The FastAPI backend follows route → service → repository → SQLAlchemy model separation. Routes own HTTP contracts, services enforce business rules and transaction boundaries, and repositories contain query logic. The React frontend is feature-oriented and uses a single typed API client plus TanStack Query for server state.
+```mermaid
+flowchart TB
+    Dev[Git push] --> CI[GitHub Actions]
+    CI --> Tests[Backend and frontend tests]
+    Tests --> Scan[Build and Trivy scan]
+    Scan --> GHCR[Public GHCR images<br/>tagged with commit SHA]
 
-PostgreSQL stores the following principal entities:
+    Browser --> NLB[AWS Network Load Balancer]
+    NLB --> Ingress[ingress-nginx]
+    Ingress -->|/| Frontend[React + Nginx<br/>2 replicas]
+    Ingress -->|/api| Backend[FastAPI<br/>2 replicas]
+    Backend --> DB[(PostgreSQL StatefulSet<br/>encrypted gp3 volume)]
+    Backend --> Metrics[Prometheus metrics endpoint]
+    Metrics --> Prom[Prometheus]
+    Prom --> Grafana[Grafana]
 
-- `patients` has many `appointments`; deletion is restricted when history exists.
-- `doctors` has many `appointments`; deletion is restricted when history exists.
-- `appointments` references exactly one patient and doctor. Active statuses are `SCHEDULED` and `CONFIRMED`; terminal statuses are `COMPLETED` and `CANCELLED`.
-- `users` contains administrator and doctor credentials. Passwords are Argon2 hashes; doctor users have a one-to-one doctor profile.
-- `doctor_working_hours` contains recurring weekly availability windows, while `doctor_time_off` contains dated exceptions.
-
-All persisted datetimes are timezone-aware and stored by PostgreSQL as UTC instants. API clients must send an explicit offset. `CLINIC_TIMEZONE` determines dashboard day boundaries and date-filter interpretation; the browser displays instants in the user's local timezone.
-
-For concurrent scheduling, the service takes a PostgreSQL transaction-scoped advisory lock keyed by doctor, validates working hours and time off, checks true interval overlap (`existing_start < new_end AND existing_end > new_start`), and the database independently enforces a partial GiST exclusion constraint for active appointments. This protects both CareFlow writes and other database clients. The migration requires permission to install the standard `btree_gist` extension.
-
-## Repository layout
-
-```text
-backend/
-  app/
-    api/routes/        HTTP endpoints
-    core/              settings, authentication, errors, logging
-    db/                metadata and session lifecycle
-    models/            SQLAlchemy entities
-    schemas/           Pydantic request/response contracts
-    repositories/      database queries
-    services/          business rules and transactions
-    main.py             FastAPI application
-    seed.py             deterministic development seed
-  alembic/versions/     executable migrations
-  tests/                unit and PostgreSQL integration tests
-frontend/
-  src/app/              router and providers
-  src/components/       layout and small shared UI pieces
-  src/features/         dashboard, patients, doctors, appointments
-  src/lib/              API client and shared types
+    TF[Terraform] --> VPC[AWS VPC<br/>2 public subnets]
+    TF --> EKS[EKS cluster<br/>2 managed workers]
+    EKS --> Ingress
 ```
 
-## Prerequisites
+The backend is a modular monolith with `route -> service -> repository -> SQLAlchemy model` separation. Services own validation and transaction boundaries; Alembic owns schema changes. Concurrent booking is protected by a per-doctor PostgreSQL advisory lock plus a partial GiST exclusion constraint, so overlapping active appointments are rejected even under concurrent requests.
 
-- Python 3.12 (3.11+ should also work)
-- PostgreSQL 14+ with permission to create `btree_gist` in the application database
-- Node.js 20 or 22 LTS and npm
+### Technology stack
 
-Node 26 was used successfully for the checks recorded below, but an LTS release is recommended for local and CI environments.
+| Layer | Technology |
+| --- | --- |
+| Frontend | React, TypeScript, Vite, TanStack Query, Nginx |
+| Backend | FastAPI, Pydantic, SQLAlchemy, Alembic, PyJWT, Argon2 |
+| Data | PostgreSQL 16 |
+| Local platform | Docker, Docker Compose, pgAdmin (optional profile) |
+| CI and security | GitHub Actions, Buildx, Trivy, GHCR |
+| Cloud platform | AWS VPC, EKS, EBS CSI, Network Load Balancer |
+| Deployment | Kubernetes, Helm, ingress-nginx |
+| Observability | Prometheus, ServiceMonitor, Grafana |
 
-## PostgreSQL setup
+## Repository map
 
-### Recommended local Docker stack
+```text
+backend/                 FastAPI source, Alembic migrations, and Pytest suite
+frontend/                React application and frontend tests
+docker-compose.yml       Local PostgreSQL, migrations, bootstrap, API, and UI
+.github/workflows/       Test, build, scan, and publish pipeline
+terraform/               AWS VPC, EKS, worker nodes, and EBS CSI identity
+k8s/                     CareFlow namespace
+helm/careflow/           Application, PostgreSQL, jobs, ingress, and monitoring
+monitoring/              kube-prometheus-stack values
+evidence/                Reviewed, non-secret assessment evidence
+PROJECT_REQUIREMENTS.md  Source grading rubric
+```
 
-The repository includes a Compose stack for PostgreSQL, migrations, administrator bootstrap, the API, and the Nginx-served frontend:
+## Run locally
+
+Prerequisites: Docker Desktop with Compose and Git. Docker is the shortest supported path; a host Python virtual environment does not need to be activated inside a container.
 
 ```bash
+git clone https://github.com/Siddhesh224-ai/careflow-devops-capstone.git
+cd careflow-devops-capstone
 cp .env.example .env
-# Replace the placeholder local passwords in .env.
+```
+
+Replace every placeholder in `.env`, then start the complete stack:
+
+```bash
 docker compose up --build -d
 docker compose ps
 ```
 
-Open the application at <http://localhost:3000> and the API documentation at <http://localhost:8000/docs>. Sign in with `ADMIN_USERNAME` and `ADMIN_PASSWORD` from the root `.env`. PostgreSQL is published only on the loopback interface at `localhost:55432` because ports 5432 and 5433 may already be used by other local projects. Containers connect to it using the Compose service hostname `db` and internal port 5432.
+- Application: <http://localhost:3000>
+- API documentation: <http://localhost:8000/docs>
+- API health: <http://localhost:8000/health>
 
-Alembic runs as a one-shot `migrate` service after PostgreSQL becomes healthy. The one-shot `bootstrap` service then creates or updates the single administrator account before the backend starts. To run all backend tests against the dedicated `careflow_test` database:
+The one-shot `migrate` container applies Alembic migrations and `bootstrap` creates or updates the single administrator before the API starts. The database persists in the `postgres_data` volume.
 
 ```bash
+# Run the backend suite against the dedicated careflow_test database
 docker compose --profile test run --build --rm test
+
+# Stop the stack but preserve database data
+docker compose down
+
+# Destructive: also delete local database and pgAdmin volumes
+docker compose down --volumes
 ```
 
-Optional pgAdmin is available through the `tools` profile:
+Optional pgAdmin is available at <http://localhost:5050> after `docker compose --profile tools up -d pgadmin`. Connect to host `db`, port `5432`, using the database values from `.env`.
+
+## Delivery pipeline
+
+Every push to `main` follows the same immutable-image path:
+
+1. Run the PostgreSQL-backed Pytest suite and fail if any test is skipped.
+2. Run frontend tests and the TypeScript/Vite production build.
+3. Build the backend and frontend container images.
+4. Scan both images with Trivy for `HIGH` and `CRITICAL` fixable vulnerabilities.
+5. Push successful images to GHCR using the full Git commit SHA as the tag.
+6. Deploy that exact SHA with Helm; no mutable `latest` tag is used.
+
+Trivy scans the final images, including application packages and operating-system packages. Fixable `HIGH` or `CRITICAL` findings fail the job and prevent publication. `ignore-unfixed` is temporarily enabled only for vendor-unfixed Debian base-image findings; the rationale and review date are recorded in [SECURITY.md](SECURITY.md).
+
+## AWS and Kubernetes deployment
+
+Terraform provisions the Sydney deployment in `ap-southeast-2`: one VPC, two public subnets in separate availability zones, an EKS control plane, two managed worker nodes, and EKS Pod Identity for the EBS CSI driver. Helm installs CareFlow in the `careflow` namespace with:
+
+- two backend and two frontend replicas;
+- ClusterIP services and hostless `/` and `/api` ingress routes;
+- ordered migration and administrator-bootstrap hook Jobs;
+- a demonstration PostgreSQL StatefulSet with a 5 Gi encrypted `gp3` volume;
+- health probes, resource requests/limits, rolling updates, and a ServiceMonitor.
+
+Secrets are created interactively as the `careflow-secrets` Kubernetes Secret and are never stored in Helm values or Git.
+
+<details>
+<summary>Deployment, verification, rollback, and teardown commands</summary>
 
 ```bash
-docker compose --profile tools up -d pgadmin
+# Configure access
+aws login --profile careflow-admin --region ap-southeast-2
+aws eks update-kubeconfig --region ap-southeast-2 --name careflow-eks --profile careflow-admin
+
+# Deploy the reviewed chart values
+kubectl apply -f k8s/namespace.yaml
+helm upgrade --install careflow helm/careflow --namespace careflow --timeout 15m
+
+# Verify
+kubectl get pods,svc,ingress -n careflow
+helm list -n careflow
+
+# Roll back one Helm revision if required
+helm history careflow -n careflow
+helm rollback careflow <REVISION> -n careflow --wait --timeout 15m
 ```
 
-Open <http://localhost:5050> and register a server with hostname `db`, port `5432`, database/user `careflow`, and the password from the root `.env` file.
-
-To stop containers while preserving PostgreSQL data, run `docker compose down`. Adding `--volumes` permanently deletes the local database volume.
-
-Create an application role and database using your normal PostgreSQL administration process. Keep credentials out of Git. A development URL using Psycopg 3 looks like:
-
-```text
-postgresql+psycopg://careflow:URL_ENCODED_PASSWORD@localhost:5432/careflow
-```
-
-Percent-encode reserved characters in user names and passwords. The role must own the database or otherwise be allowed to create tables, indexes, enum types, and `btree_gist` during the initial migration.
-
-## Backend setup
+Final teardown must remove Kubernetes-created load balancers and volumes before Terraform:
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate             # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-cp .env.example .env
-# Edit DATABASE_URL and local settings in .env
-alembic upgrade head
-python -m app.bootstrap_admin
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+helm uninstall careflow -n careflow
+helm uninstall monitoring -n monitoring
+helm uninstall ingress-nginx -n ingress-nginx
+kubectl get svc -A --field-selector spec.type=LoadBalancer
+
+cd terraform
+terraform plan -destroy -out=careflow-destroy.tfplan
+terraform apply careflow-destroy.tfplan
 ```
 
-OpenAPI UI: <http://localhost:8000/docs>  
-OpenAPI schema: <http://localhost:8000/openapi.json>
+`terraform apply` and `terraform destroy` create and remove billable resources. Confirm the AWS identity, profile, region, and plan before approval, and verify EKS, EC2, load balancers, EBS volumes, and the VPC are gone afterward.
 
-### Migrations
+</details>
 
-Run all Alembic commands from `backend/`:
+### Infrastructure decisions and compromises
 
-```bash
-alembic history                         # inspect revision history
-alembic current                         # revision applied to this database
-alembic revision --autogenerate -m "describe change"
-alembic upgrade head
-alembic downgrade -1
-```
+- The original target was two `t3.medium` workers. This AWS Free Plan account rejected that type, so the demonstrated cluster used two `m7i-flex.large` workers that were eligible for the account and fit its five-vCPU quota. This preserves the two-worker architecture but does not satisfy a requirement for the literal `t3.medium` type.
+- An organization service-control policy denied `iam:CreateOpenIDConnectProvider`. IRSA was therefore disabled and the EBS CSI controller received a dedicated role through EKS Pod Identity instead of broadening the worker-node role.
+- In-cluster PostgreSQL is appropriate for this short-lived demonstration, not a production healthcare deployment. A production design should use a managed, private, backed-up database such as Amazon RDS.
 
-Review autogenerated migrations before applying them. The application does not call `create_all()`; schema changes happen only through Alembic.
+## Requirements and evidence
 
-### Synthetic seed data
+This matrix maps the implementation directly to [PROJECT_REQUIREMENTS.md](PROJECT_REQUIREMENTS.md) without making the reader inspect every screenshot.
 
-After migrating a development database:
-
-```bash
-python -m app.seed
-```
-
-The command uses stable UUIDs and `merge`, so rerunning it updates the same synthetic records instead of duplicating them. It is never invoked automatically. The two synthetic doctor logins are `doctor.kapoor` and `doctor.rao`, both with development-only password `Doctor123!`; change or remove these credentials outside local demonstrations.
-
-## Authentication and roles
-
-The login screen is shared by both roles. A successful login stores a bearer token in tab-scoped browser session storage; the token expires after `JWT_EXPIRATION_HOURS` (48 hours by default). Separate tabs can therefore stay signed in as different roles, and closing a tab clears its session. A `401` response signs that tab out. Changing `JWT_SECRET` invalidates every previously issued token.
-
-- `ADMIN` can access the operational dashboard and manage patients, doctors, and appointments. Creating a doctor also creates that doctor's login and initial working hours.
-- `DOCTOR` can access only their own dashboard, appointments, working hours, and time-off records. A doctor can mark one of their own active appointments complete only after its scheduled start time.
-
-The root `.env` is for local development only. Use a randomly generated secret and strong passwords in any deployed environment, and supply secrets through the deployment platform rather than committing them.
-
-## Frontend setup
-
-```bash
-cd frontend
-npm install
-cp .env.example .env
-npm run dev
-```
-
-Open <http://localhost:5173>. `VITE_API_BASE_URL` must include `/api/v1`, for example `http://localhost:8000/api/v1`. API URLs are centralized in `src/lib/api-client.ts`.
-
-## API summary
-
-| Method | Path | Purpose |
+| Module | What was delivered | Evidence |
 | --- | --- | --- |
-| GET | `/health` | Process liveness (`{"status":"ok"}`) |
-| GET | `/ready` | PostgreSQL connectivity readiness |
-| POST | `/api/v1/auth/login` | Exchange username/password for a 48-hour JWT |
-| GET | `/api/v1/auth/me` | Return the authenticated user |
-| GET, POST | `/api/v1/patients` | Paginated search and creation |
-| GET, PUT, DELETE | `/api/v1/patients/{id}` | Detail, replacement, safe deletion |
-| GET | `/api/v1/patients/{id}/appointments` | Patient appointment history |
-| GET, POST | `/api/v1/doctors` | Paginated search and creation |
-| GET, PUT, DELETE | `/api/v1/doctors/{id}` | Detail, replacement, safe deletion |
-| GET, POST | `/api/v1/appointments` | Filtered list and scheduling |
-| POST | `/api/v1/appointments/with-new-patient` | Atomically register a patient and schedule their appointment |
-| GET, PUT, DELETE | `/api/v1/appointments/{id}` | Detail, replacement, cancellation |
-| GET | `/api/v1/dashboard/summary` | Aggregated dashboard data |
-| GET | `/api/v1/doctor/dashboard` | Current doctor's appointments and availability |
-| PUT | `/api/v1/doctor/working-hours` | Replace current doctor's weekly hours |
-| POST, DELETE | `/api/v1/doctor/time-off` | Add or remove current doctor's time off |
-| PATCH | `/api/v1/doctor/appointments/{id}/complete` | Complete an elapsed appointment owned by the doctor |
+| **M1 — Application** | FastAPI health/readiness and REST APIs; React UI; PostgreSQL models and Alembic migrations; admin and doctor workflows. | [Ingress application](evidence/screenshots/application_ingress.png), [`backend/app`](backend/app), [`frontend/src`](frontend/src) |
+| **M2 — Testing** | PostgreSQL test database guard, fixtures, and 14 currently defined tests across health/metrics, auth, patients, doctors, appointments, dashboard, and doctor portal. | [13-pass captured run](evidence/screenshots/backend_tests_passed.png), [`backend/tests`](backend/tests), [`pytest.ini`](backend/pytest.ini) |
+| **M3 — Git/GitHub** | Public repository, ignored secrets/build output/state, and 14 meaningful commits at the time of this README. | [Commit history](https://github.com/Siddhesh224-ai/careflow-devops-capstone/commits/main/), [`.gitignore`](.gitignore) |
+| **M4 — Docker** | Non-root backend image, multi-stage non-root frontend image, and a health-ordered Compose stack for PostgreSQL, migrations, bootstrap, API, and UI. | [Healthy Compose services](evidence/screenshots/docker_containers_healthy.png), [`docker-compose.yml`](docker-compose.yml), [backend Dockerfile](backend/Dockerfile), [frontend Dockerfile](frontend/Dockerfile) |
+| **M5 — CI/CD** | Push/PR pipeline; backend and frontend gates; two SHA-tagged public GHCR images. | [Successful workflow](evidence/screenshots/github_actions_success.png), [backend package capture](evidence/screenshots/github_backend_package.png), [public frontend package](https://github.com/users/Siddhesh224-ai/packages/container/package/careflow-frontend), [`ci.yml`](.github/workflows/ci.yml) |
+| **M6 — DevSecOps** | Trivy scans both final images and fails on fixable `HIGH`/`CRITICAL` findings before push. | [Passed build/scan/push steps](evidence/screenshots/successfull_gh_run_watch.png), [security decision](SECURITY.md) |
+| **M7 — Terraform** | Valid pinned modules; VPC and two public subnets; EKS with two managed workers; EBS CSI Pod Identity; 53 Terraform-managed resources destroyed after evaluation. | [Saved plan](evidence/screenshots/terraform_plan_created.png), [successful apply](evidence/screenshots/terraform_apply_complete.png), [redacted VPC resource map](evidence/screenshots/aws_vpc_resource_map_redacted.png), [two Ready nodes](evidence/screenshots/aws_nodes_ready.png), [EBS CSI active](evidence/screenshots/ebs_csi_active.png), [destroy complete](evidence/screenshots/terraform_destroy_complete.png) |
+| **M8 — Kubernetes/Helm** | Namespace, complete Helm chart, two application replicas per tier, services, ingress, hooks, StatefulSet, probes, limits, and rolling updates. | [Pods](evidence/screenshots/kubectl_get_pods.png), [services](evidence/screenshots/kubectl_get_svc.png), [Helm release](evidence/screenshots/helm_list.png), [Ingress application](evidence/screenshots/application_ingress.png) |
+| **M9 — Observability** | FastAPI Prometheus instrumentation, ServiceMonitor discovery, kube-prometheus-stack, two healthy scrape targets, and a live request-rate panel. | [`/metrics` output](evidence/localhost/metric_output.txt), [Prometheus target UP](evidence/screenshots/prometheus_backend_up.png), [Grafana panel](evidence/screenshots/grafana_request_rate.png) |
+| **M10 — Documentation/demo** | This architecture and operations guide plus a visible UI-change commit and recorded deployment workflow. | [Recorded walkthrough](demo/demo_video.mov), [demo commit](https://github.com/Siddhesh224-ai/careflow-devops-capstone/commit/c44f646b646535437bf13bfbc5805bffd25821cd) |
 
-Appointment `DELETE` is a cancellation workflow: it changes an active appointment to `CANCELLED` and returns `204`. Completed records are immutable. A cancelled record is idempotently accepted by DELETE but cannot be edited. Patient and doctor DELETE returns `409` when appointment history exists.
+> **Evidence note:** All AWS infrastructure shown in these captures was subsequently destroyed by Terraform. Any visible VPC, subnet, node, endpoint, or add-on values are historical resource identifiers—not credentials or active secrets. The VPC resource-map capture is redacted to minimize account-identifying information.
 
-Inline patient registration and appointment creation use one database transaction. If availability validation, collision protection, or the appointment insert fails, the new patient insert is rolled back as well.
+## Live-change demonstration
 
-All patient, doctor, appointment, and administrator-dashboard endpoints require an administrator token. Doctor-portal endpoints require a doctor token. `/health`, `/ready`, and `/api/v1/auth/login` are public.
+The demonstration change updates the sidebar subtitle in `frontend/src/components/layout/AppShell.tsx` from **“Clinic operations”** to **“CareFlow Clinic operations”**. It was committed as `c44f646` so the change is small, visible, and easy to trace through the full pipeline.
 
-## Configuration
+The recorded walkthrough follows this sequence:
 
-| Variable | Default/example | Meaning |
-| --- | --- | --- |
-| `DATABASE_URL` | `postgresql+psycopg://...` | Required PostgreSQL connection URL |
-| `APP_ENV` | `development` | Runtime environment label |
-| `LOG_LEVEL` | `INFO` | Python logging level |
-| `CORS_ORIGINS` | `["http://localhost:5173"]` | Explicit JSON origin allow-list |
-| `CLINIC_TIMEZONE` | `Asia/Kolkata` | IANA clinic timezone |
-| `MIN_APPOINTMENT_DURATION` | `15` | Service validation lower bound |
-| `MAX_APPOINTMENT_DURATION` | `240` | Service validation upper bound |
-| `JWT_SECRET` | no safe default | Secret used to sign access tokens; use at least 32 random characters |
-| `JWT_EXPIRATION_HOURS` | `48` | Access-token lifetime; 48 hours is two days |
-| `ADMIN_USERNAME` | `admin` | Username created by the bootstrap service |
-| `ADMIN_PASSWORD` | no safe default | Password applied to the administrator account by bootstrap |
-| `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` | Browser API root |
+1. Show the original deployed text and the source line.
+2. Make the frontend text change, review `git diff`, commit, and push to `main`.
+3. Watch backend tests, frontend tests/build, both Trivy scans, and both GHCR pushes succeed.
+4. Copy the new full commit SHA used as the image tag.
+5. Upgrade the Helm release to that SHA and watch the frontend rollout complete.
+6. Refresh the ingress URL and show the changed text in the deployed application.
+7. Show the Prometheus target and Grafana request-rate panel, then retain teardown for the end of evaluation.
 
-The database check constraint currently matches the documented 15–240 minute defaults. Changing those bounds also requires a migration so application and database validation remain aligned.
-
-## Tests and verification
-
-Backend fast tests:
-
-```bash
-cd backend
-.venv/bin/pytest -q
-```
-
-PostgreSQL integration tests require a dedicated disposable database whose name contains `test`. This guard prevents accidental use of a normal developer database:
-
-```bash
-export TEST_DATABASE_URL='postgresql+psycopg://careflow:careflow@localhost:5432/careflow_test'
-.venv/bin/pytest -q
-```
-
-The suite migrates that database to `head`, clears only CareFlow-owned tables between cases, and verifies CRUD, authentication, the two-day expiry, role protection, patient history, working hours, time-off blocking, overlap rules, transitions, foreign references, and doctor completion rules.
-
-Frontend checks:
-
-```bash
-cd frontend
-npm test
-npm run build
-npm audit --omit=dev --audit-level=high
-```
-
-## Troubleshooting
-
-- **`/ready` returns 503:** confirm PostgreSQL is running and `DATABASE_URL` is reachable from the API process.
-- **Migration cannot create `btree_gist`:** have a database administrator install the extension once, then rerun `alembic upgrade head`.
-- **Browser reports a network error:** start the API, verify `/health`, then check `VITE_API_BASE_URL` and `CORS_ORIGINS`.
-- **Login returns 401:** verify the administrator values in `.env`; for a doctor, use the username and password entered when that doctor was created.
-- **Appointment returns 409:** the doctor is disabled, outside working hours, on time off, already booked during that interval, or the requested status transition is not permitted.
-- **Changed PostgreSQL credentials do not take effect:** the official image initializes credentials only for an empty volume. For disposable local data, run `docker compose down --volumes`, then start the stack again.
-- **Integration tests skip:** set `TEST_DATABASE_URL` to a dedicated database containing `test` in its name.
+> **Recorded walkthrough:** [watch or download the submitted demonstration](demo/demo_video.mov).
 
 ## Current limitations
 
-- No refresh tokens, password-reset/change flow, login rate limiting, audit trail, encryption policy, backup automation, or healthcare compliance controls.
-- Single-clinic design; no tenancy, recurring visits, billing, prescriptions, medical records, or reminders.
-- Patient/doctor deletion intentionally preserves any entity with appointment history; there is no archival UI yet.
-- List selectors load up to 100 patients/doctors, appropriate for this demonstration scope but not a large clinic.
-- Backend integration and migration execution require a running PostgreSQL instance; SQLite is deliberately not used as a substitute.
-
-## Infrastructure decision record
-
-### EKS worker instance compromise — 14 October 2026
-
-The original deployment requirement specified two `t3.medium` EKS worker nodes. During the first Terraform apply, AWS rejected the managed node group because `t3.medium` is not eligible under this account's Free Plan. The deployment therefore uses two `m7i-flex.large` x86_64 workers, which AWS reported as Free Tier eligible for this account and which fit its five-vCPU EC2 On-Demand quota.
-
-This preserves the intended two-worker EKS architecture and provides sufficient memory for CareFlow and the monitoring stack, but it does not satisfy a rubric that requires the literal `t3.medium` instance type. If that exact type becomes mandatory, the account must first be moved to a plan that permits it, the cost impact must be approved, and `terraform/main.tf`, `STEPS.md`, and the deployment evidence must be updated together.
-
-The same account policy explicitly denies creation of IAM OIDC providers, so IRSA is disabled. The EBS CSI controller receives its required AWS permissions through a dedicated EKS Pod Identity role instead; this avoids the blocked OIDC operation and avoids exposing the worker-node IAM role to controller pods through EC2 instance metadata.
-
-## DevOps extension path
-
-The next recommended step is to run the existing container builds, health probes, migrations, integration tests, frontend tests/build, and dependency audit in GitHub Actions. Kubernetes manifests, secret management, observability, backup validation, and deployment promotion can follow without changing the modular application boundary.
+- No refresh tokens, password reset, login rate limiting, audit trail, backup automation, TLS/domain setup, or healthcare compliance controls.
+- Single-clinic demonstration; no tenancy, billing, prescriptions, reminders, or medical-record system.
+- The hostless ingress uses HTTP for the temporary demonstration endpoint.
+- The in-cluster PostgreSQL deployment is intentionally single-replica and demonstration-only.
