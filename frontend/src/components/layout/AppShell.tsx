@@ -31,7 +31,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </div>
         <div>
           <div className="font-semibold tracking-tight">CareFlow</div>
-          <div className="text-xs text-teal-100/60">Clinic operations</div>
+          <div className="text-xs text-teal-100/60"> CareFlow Clinic operations</div>
         </div>
       </div>
       <nav className="flex-1 space-y-1 p-3">
